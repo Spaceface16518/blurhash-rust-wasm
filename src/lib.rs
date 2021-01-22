@@ -129,9 +129,9 @@ fn decode_dc(value: usize) -> [f64; 3] {
     let int_g = (value >> 8) & 255;
     let int_b = value & 255;
     [
-        srgb_to_linear(int_r),
-        srgb_to_linear(int_g),
-        srgb_to_linear(int_b),
+        srgb_to_linear(int_r as u8),
+        srgb_to_linear(int_g as u8),
+        srgb_to_linear(int_b as u8),
     ]
 }
 
@@ -173,16 +173,12 @@ fn srgb_to_linear(value: u8) -> f64 {
 // TODO: Think about argument order here...
 // What is more common in Rust? Data or config first?
 pub fn encode(
-    pixels: Vec<u8>,
+    pixels: Vec<SRGBA>,
     cx: usize,
     cy: usize,
     width: usize,
     height: usize,
 ) -> Result<String, EncodingError> {
-    // Should we assume RGBA for round-trips? Or does it not matter?
-    let bytes_per_row = width * 4;
-    let bytes_per_pixel = 4;
-
     // NOTE: We could clamp instead of Err.
     // The TS version does that. Not sure which one is better.
     // We also could (should?) be checking for the color space
@@ -190,29 +186,17 @@ pub fn encode(
         return Err(EncodingError::ComponentsNumberInvalid);
     }
 
-    if width * height * 4 != pixels.len() {
-        return Err(EncodingError::BytesPerPixelMismatch);
-    }
-
-    let mut dc: [f64; 3] = [0., 0., 0.];
-    let mut ac: Vec<[f64; 3]> = Vec::with_capacity(cy * cx - 1);
+    let mut dc: Linear = Linear::default();
+    let mut ac: Vec<Linear> = Vec::with_capacity(cy * cx - 1);
 
     for y in 0..cy {
         for x in 0..cx {
             let normalisation = if x == 0 && y == 0 { 1f64 } else { 2f64 };
-            let factor = multiply_basis_function(
-                &pixels,
-                width,
-                height,
-                bytes_per_row,
-                bytes_per_pixel,
-                0,
-                |a, b| {
-                    normalisation
-                        * f64::cos((PI * x as f64 * a) / width as f64)
-                        * f64::cos((PI * y as f64 * b) / height as f64)
-                },
-            );
+            let factor = multiply_basis_function(&pixels, width, height, 0, |a, b| {
+                normalisation
+                    * f64::cos((PI * x as f64 * a) / width as f64)
+                    * f64::cos((PI * y as f64 * b) / height as f64)
+            });
 
             if x == 0 && y == 0 {
                 // The first iteration is the dc
@@ -232,82 +216,65 @@ pub fn encode(
     let maximum_value: f64;
 
     if !ac.is_empty() {
-        // I'm sure there's a better way to write this; following the Swift atm :)
+        // the second `as_slice` comes from rgb::ComponentSlice
         let actual_maximum_value = ac
-            .clone()
-            .into_iter()
-            .map(|[a, b, c]| f64::max(f64::max(f64::abs(a), f64::abs(b)), f64::abs(c)))
-            .max_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal))
+            .as_slice()
+            .as_slice()
+            .iter()
+            .copied()
+            .max_by(|a: &f64, b: &f64| a.partial_cmp(b).unwrap_or(Ordering::Equal))
             .unwrap();
-        let quantised_maximum_value = usize::max(
-            0,
-            usize::min(82, f64::floor(actual_maximum_value * 166f64 - 0.5) as usize),
-        );
-        maximum_value = ((quantised_maximum_value + 1) as f64) / 166f64;
-        hash.extend(encode_base83_string(quantised_maximum_value, 1));
+        let quantised_maximum_value = (actual_maximum_value * 166f64 - 0.5)
+            .floor()
+            .min(82.)
+            .max(0.);
+        maximum_value = (quantised_maximum_value + 1.) / 166f64;
+        hash.extend(encode_base83_string(quantised_maximum_value as usize, 1));
     } else {
         maximum_value = 1f64;
         hash.extend(encode_base83_string(0, 1));
     }
 
-    hash.extend(encode_base83_string(encode_dc(dc), 4));
+    hash.extend(encode_base83_string(encode_dc(dc.into()), 4));
 
     for factor in ac {
-        hash.extend(encode_base83_string(encode_ac(factor, maximum_value), 2));
+        hash.extend(encode_base83_string(
+            encode_ac(factor.into(), maximum_value),
+            2,
+        ));
     }
 
     Ok(hash)
 }
 
 fn multiply_basis_function<F>(
-    pixels: &[u8],
+    pixels: &[SRGBA],
     width: usize,
     height: usize,
-    bytes_per_row: usize,
-    bytes_per_pixel: usize,
     pixel_offset: usize,
     basis_function: F,
-) -> [f64; 3]
+) -> Linear
 where
     F: Fn(f64, f64) -> f64,
 {
-    let mut r = 0f64;
-    let mut g = 0f64;
-    let mut b = 0f64;
+    let mut pix = Linear::default();
 
     for x in 0..width {
         for y in 0..height {
             let basis = basis_function(x as f64, y as f64);
-            r += basis
-                * srgb_to_linear(
-                    usize::try_from(pixels[bytes_per_pixel * x + pixel_offset + y * bytes_per_row])
-                        .unwrap(),
-                );
-            g += basis
-                * srgb_to_linear(
-                    usize::try_from(
-                        pixels[bytes_per_pixel * x + pixel_offset + 1 + y * bytes_per_row],
-                    )
-                    .unwrap(),
-                );
-            b += basis
-                * srgb_to_linear(
-                    usize::try_from(
-                        pixels[bytes_per_pixel * x + pixel_offset + 2 + y * bytes_per_row],
-                    )
-                    .unwrap(),
-                );
+            let pixel = pixels[pixel_offset + width * y + x];
+            pix += pixel.rgb().map(srgb_to_linear) * basis
         }
     }
 
-    let scale = 1f64 / ((width * height) as f64);
+    let scale_down = (width * height) as f64;
 
-    [r * scale, g * scale, b * scale]
+    pix / scale_down
 }
 
 fn encode_dc([r, g, b]: [f64; 3]) -> usize {
-    let rounded = |v| linear_to_srgb(v);
-    ((rounded(r) << 16) + (rounded(g) << 8) + rounded(b)) as usize
+    let rounded = |v| linear_to_srgb(v) as usize;
+    (rounded(r) << 16) + (rounded(g) << 8) + rounded(b)
 }
 
 fn encode_ac([r, g, b]: [f64; 3], maximum_value: f64) -> usize {
