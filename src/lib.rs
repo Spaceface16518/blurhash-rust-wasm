@@ -150,16 +150,16 @@ fn sign_pow(value: f64, exp: f64) -> f64 {
     value.abs().powf(exp).copysign(value)
 }
 
-fn linear_to_srgb(value: f64) -> usize {
-    let v = f64::max(0f64, f64::min(1f64, value));
+fn linear_to_srgb(value: f64) -> u8 {
+    let v = value.min(1.).max(0.);
     if v <= 0.003_130_8 {
-        (v * 12.92 * 255f64 + 0.5) as usize
+        (v * 12.92 * 255f64 + 0.5) as u8
     } else {
-        ((1.055 * f64::powf(v, 1f64 / 2.4) - 0.055) * 255f64 + 0.5) as usize
+        ((1.055 * v.powf(1f64 / 2.4) - 0.055) * 255f64 + 0.5) as u8
     }
 }
 
-fn srgb_to_linear(value: usize) -> f64 {
+fn srgb_to_linear(value: u8) -> f64 {
     let v = (value as f64) / 255f64;
     if v <= 0.04045 {
         v / 12.92
