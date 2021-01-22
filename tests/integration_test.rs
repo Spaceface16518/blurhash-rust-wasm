@@ -1,6 +1,7 @@
 use blurhash_wasm::{decode, encode};
 use image;
 use std::convert::TryFrom;
+use rgb::FromSlice;
 
 #[test]
 fn err_if_hash_length_less_than_6() {
@@ -45,7 +46,7 @@ fn encodes_ok() {
     let expected = "LKO2?V%2Tw=^]~RBVZRi};RPxuwH";
 
     let res = encode(
-        input.into_vec(),
+        input.into_vec().as_rgba().to_owned(),
         4,
         3,
         usize::try_from(width).unwrap(),
@@ -77,7 +78,7 @@ fn encodes_ok_2() {
     let expected = "LGFFaXYk^6#M@-5c,1Ex@@or[j6o";
 
     let res = encode(
-        input.into_vec(),
+        input.into_vec().as_rgba().to_owned(),
         4,
         3,
         usize::try_from(width).unwrap(),
@@ -108,7 +109,7 @@ fn round_trips_ok() {
     let expected_encode = "LKO2?V%2Tw=^]~RBVZRi};RPxuwH";
 
     let encode_res = encode(
-        input.into_vec(),
+        input.into_vec().as_slice().as_rgba().to_owned(),
         4,
         3,
         usize::try_from(width).unwrap(),
