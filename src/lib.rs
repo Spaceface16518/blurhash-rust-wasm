@@ -1,5 +1,6 @@
 mod utils;
 
+use rgb::{ComponentMap, ComponentSlice, RGB, RGBA};
 use std::cmp::Ordering;
 use std::convert::TryFrom;
 use std::f64::consts::PI;
@@ -30,6 +31,10 @@ pub enum EncodingError {
     #[error("the bytes per pixel does not match the pixel count")]
     BytesPerPixelMismatch,
 }
+
+type SRGBA = RGBA<u8>;
+type SRGB = RGB<u8>;
+type Linear = RGB<f64>;
 
 // Decode
 
